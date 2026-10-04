@@ -1,0 +1,94 @@
+@startuml
+title Диаграмма кода (C4). Основное решение: компонент InferenceEngine фермового агента
+
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam packageFontSize 14
+
+package "InferenceEngine" {
+
+    class InferenceEngine {
+        - session: OnnxSession
+        - frame_buffer: FrameBuffer
+        - model_path: str
+        + run(frame: PreparedFrame): DetectionResult
+        + reload_model(path: str): void
+        + get_model_version(): str
+    }
+
+    class OnnxSession {
+        - runtime: ort.InferenceSession
+        - providers: list[str]
+        - model_version: str
+        + load(path: str, device: DeviceType): void
+        + infer(tensor: ndarray): ndarray
+        + release(): void
+    }
+
+    enum DeviceType {
+        CPU
+        CUDA
+        TENSORRT
+        OPENVINO
+    }
+
+    class FrameBuffer {
+        - buffer: deque[PreparedFrame]
+        - max_size: int
+        + push(frame: PreparedFrame): void
+        + pop(): PreparedFrame
+        + is_empty(): bool
+    }
+
+    class PreparedFrame {
+        - tensor: ndarray
+        - camera_id: str
+        - timestamp: datetime
+        - resolution: tuple[int, int]
+    }
+
+    class Detection {
+        - bbox: BoundingBox
+        - class_id: int
+        - class_name: str
+        - confidence: float
+    }
+
+    class BoundingBox {
+        - x_min: float
+        - y_min: float
+        - x_max: float
+        - y_max: float
+        + area(): float
+        + iou(other: BoundingBox): float
+    }
+
+    class DetectionResult {
+        - frame: PreparedFrame
+        - detections: list[Detection]
+        - inference_time_ms: float
+        + filter_by_confidence(threshold: float): list[Detection]
+        + filter_by_class(class_name: str): list[Detection]
+    }
+
+    class PostProcessor {
+        - confidence_threshold: float
+        - nms_threshold: float
+        + apply_nms(raw_output: ndarray): list[Detection]
+        + decode_boxes(raw_output: ndarray): list[BoundingBox]
+        + decode_classes(raw_output: ndarray): list[tuple[int, float]]
+    }
+}
+
+InferenceEngine --> OnnxSession : использует
+InferenceEngine --> FrameBuffer : читает кадры
+InferenceEngine --> PostProcessor : постобработка выхода модели
+InferenceEngine --> DetectionResult : возвращает
+OnnxSession --> DeviceType : тип устройства
+PostProcessor --> Detection : формирует
+Detection --> BoundingBox : координаты объекта
+DetectionResult --> Detection : содержит список
+DetectionResult --> PreparedFrame : привязан к кадру
+FrameBuffer --> PreparedFrame : хранит
+
+@enduml

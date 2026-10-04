@@ -1,0 +1,43 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Компонентная диаграмма (C3). Основное решение: контейнер "Видеоаналитика" фермового агента
+
+' === Внешние контейнеры фермового агента ===
+Container(device_adapter, "Адаптер устройств", "Go", "Получает видеопоток с камер по RTSP")
+Container(local_alert, "Локальные оповещения", "Go", "Отправка оповещений дежурному")
+Container(sync_agent, "Агент синхронизации", "Go", "Передача данных на центральную платформу")
+ContainerDb(local_db, "Локальная БД", "SQLite", "Буфер событий и состояние")
+
+' === Контейнер "Видеоаналитика" ===
+Container_Boundary(video_analytics, "Видеоаналитика (Python, ONNX Runtime)") {
+
+    Component(stream_mgr, "StreamManager", "Python", "Управляет подключениями к камерам через адаптер устройств. Захватывает кадры из видеопотоков RTSP")
+    Component(frame_preprocessor, "FramePreprocessor", "Python, OpenCV", "Изменяет размер кадра, нормализует значения пикселей, формирует входной тензор для модели")
+    Component(inference_engine, "InferenceEngine", "Python, ONNX Runtime", "Загружает ONNX-модель и выполняет инференс. Возвращает список детекций с координатами, классом и уверенностью")
+    Component(behavior_analyzer, "BehaviorAnalyzer", "Python", "Анализирует детекции: определяет драки, задавливание поросят, беспокойное поведение. Применяет временные правила по длительности и частоте событий")
+    Component(health_assessor, "HealthAssessor", "Python", "Оценивает состояние животных по внешним признакам: болезнь, гибель. Сравнивает с эталонными паттернами")
+    Component(headcount_tracker, "HeadcountTracker", "Python", "Пересчитывает поголовье. Дедуплицирует животных между кадрами разных камер")
+    Component(event_publisher, "EventPublisher", "Python", "Формирует события аналитики с указанием типа, времени, камеры и уверенности. Передаёт в локальные оповещения и агент синхронизации")
+    Component(model_manager, "ModelManager", "Python", "Загружает ONNX-модель из файла. Применяет обновления модели, полученные через агент синхронизации. Хранит текущую версию")
+}
+
+' === Связи ===
+Rel(stream_mgr, device_adapter, "Запрашивает видеопоток", "внутренний API")
+Rel(stream_mgr, frame_preprocessor, "Передаёт сырые кадры")
+Rel(frame_preprocessor, inference_engine, "Передаёт подготовленные тензоры")
+Rel(inference_engine, behavior_analyzer, "Передаёт детекции")
+Rel(inference_engine, health_assessor, "Передаёт детекции")
+Rel(inference_engine, headcount_tracker, "Передаёт детекции")
+Rel(behavior_analyzer, event_publisher, "Событие: драка, задавливание, беспокойство")
+Rel(health_assessor, event_publisher, "Событие: болезнь, гибель")
+Rel(headcount_tracker, event_publisher, "Событие: результат пересчёта")
+Rel(event_publisher, local_alert, "Оповещение о нештатной ситуации", "внутренний API")
+Rel(event_publisher, sync_agent, "Данные для синхронизации с центром", "внутренний API")
+Rel(event_publisher, local_db, "Сохраняет события", "SQL")
+Rel(model_manager, inference_engine, "Загружает модель в сессию ONNX Runtime")
+Rel(sync_agent, model_manager, "Доставляет обновление модели", "внутренний API")
+
+@enduml
