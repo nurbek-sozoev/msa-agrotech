@@ -1,0 +1,143 @@
+@startuml
+title Диаграмма кода (C4). Альтернативное решение: компоненты BatchProcessor и GPUPoolManager центральной платформы
+
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam packageFontSize 14
+
+package "BatchProcessor" {
+
+    class BatchProcessor {
+        - queue: FrameQueue
+        - batch_size: int
+        - timeout_ms: int
+        + collect_batch(): Batch
+        + process(batch: Batch): list[DetectionResult]
+    }
+
+    class Batch {
+        - frames: list[PreparedFrame]
+        - farm_contexts: list[FarmContext]
+        - created_at: datetime
+        + size(): int
+        + get_tensor(): ndarray
+    }
+
+    class FarmContext {
+        - farm_id: str
+        - camera_id: str
+        - agent_address: str
+        - frame_index: int
+    }
+
+    class PreparedFrame {
+        - tensor: ndarray
+        - camera_id: str
+        - farm_id: str
+        - timestamp: datetime
+        - resolution: tuple[int, int]
+    }
+
+    class FrameQueue {
+        - queue: deque[PreparedFrame]
+        - max_size: int
+        - overflow_strategy: OverflowStrategy
+        + enqueue(frame: PreparedFrame): void
+        + dequeue(count: int): list[PreparedFrame]
+        + size(): int
+    }
+
+    enum OverflowStrategy {
+        DROP_OLDEST
+        DROP_NEWEST
+        BLOCK
+    }
+}
+
+package "GPUPoolManager" {
+
+    class GPUPoolManager {
+        - workers: list[GPUWorker]
+        - strategy: AllocationStrategy
+        + allocate(batch: Batch): GPUWorker
+        + release(worker: GPUWorker): void
+        + get_utilization(): dict[str, float]
+    }
+
+    class GPUWorker {
+        - gpu_id: int
+        - session: OnnxSession
+        - status: WorkerStatus
+        - current_load: int
+        + infer(tensor: ndarray): ndarray
+        + is_available(): bool
+    }
+
+    enum WorkerStatus {
+        IDLE
+        BUSY
+        ERROR
+        MAINTENANCE
+    }
+
+    enum AllocationStrategy {
+        ROUND_ROBIN
+        LEAST_LOADED
+        FARM_AFFINITY
+    }
+
+    class OnnxSession {
+        - runtime: ort.InferenceSession
+        - providers: list[str]
+        - model_version: str
+        + load(path: str): void
+        + infer(tensor: ndarray): ndarray
+        + release(): void
+    }
+}
+
+package "DetectionResult" {
+
+    class DetectionResult {
+        - farm_context: FarmContext
+        - detections: list[Detection]
+        - inference_time_ms: float
+        + filter_by_confidence(threshold: float): list[Detection]
+        + filter_by_class(class_name: str): list[Detection]
+    }
+
+    class Detection {
+        - bbox: BoundingBox
+        - class_id: int
+        - class_name: str
+        - confidence: float
+    }
+
+    class BoundingBox {
+        - x_min: float
+        - y_min: float
+        - x_max: float
+        - y_max: float
+        + area(): float
+        + iou(other: BoundingBox): float
+    }
+}
+
+' === Связи ===
+BatchProcessor --> FrameQueue : читает кадры
+BatchProcessor --> Batch : формирует пакет
+BatchProcessor --> GPUPoolManager : запрашивает GPU для инференса
+Batch --> PreparedFrame : содержит кадры
+Batch --> FarmContext : привязка к фермам
+FrameQueue --> PreparedFrame : хранит
+FrameQueue --> OverflowStrategy : стратегия при переполнении
+GPUPoolManager --> GPUWorker : управляет пулом
+GPUPoolManager --> AllocationStrategy : стратегия распределения
+GPUWorker --> OnnxSession : выполняет инференс
+GPUWorker --> WorkerStatus : текущее состояние
+BatchProcessor --> DetectionResult : возвращает
+DetectionResult --> Detection : содержит список
+DetectionResult --> FarmContext : привязан к ферме
+Detection --> BoundingBox : координаты объекта
+
+@enduml

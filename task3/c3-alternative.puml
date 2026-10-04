@@ -1,0 +1,61 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Компонентная диаграмма (C3). Альтернативное решение: контейнеры "Сервис приёма видео" и "Видеоаналитика" центральной платформы
+
+' === Внешние контейнеры ===
+Container(thin_agent, "Тонкий фермовый агент", "Go", "Ретранслирует сжатый видеопоток с ферм")
+Container(notification, "Сервис оповещений", "Go", "Отправка push, email, SMS")
+Container(kafka, "Apache Kafka", "Kafka", "Шина событий")
+ContainerDb(pg, "PostgreSQL", "PostgreSQL 16", "Операционные данные")
+System_Ext(gpu, "GPU-кластер", "Серверы с NVIDIA GPU")
+
+' === Контейнер "Сервис приёма видео" ===
+Container_Boundary(video_ingest, "Сервис приёма видео (Go)") {
+
+    Component(stream_receiver, "StreamReceiver", "Go", "Принимает сжатые видеопотоки от фермовых агентов по WebRTC и HTTPS. Регистрирует подключения ферм")
+    Component(stream_decoder, "StreamDecoder", "Go, FFmpeg", "Декодирует сжатый видеопоток в последовательность кадров")
+    Component(farm_router, "FarmRouter", "Go", "Привязывает каждый кадр к ферме и камере. Маршрутизирует результаты обратно на ферму-источник")
+    Component(frame_queue, "FrameQueue", "Go", "Очередь кадров для передачи в видеоаналитику. Сглаживает неравномерность поступления потоков с разных ферм")
+}
+
+' === Контейнер "Видеоаналитика" ===
+Container_Boundary(video_analytics, "Видеоаналитика (Python, ONNX Runtime)") {
+
+    Component(batch_processor, "BatchProcessor", "Python", "Формирует пакеты кадров из нескольких ферм для эффективного использования GPU. Размер пакета зависит от доступной памяти GPU")
+    Component(frame_preprocessor, "FramePreprocessor", "Python, OpenCV", "Изменяет размер кадра, нормализует значения пикселей, формирует входной тензор для модели")
+    Component(inference_engine, "InferenceEngine", "Python, ONNX Runtime", "Выполняет пакетный ML-инференс на GPU-кластере. Возвращает список детекций с координатами, классом и уверенностью")
+    Component(behavior_analyzer, "BehaviorAnalyzer", "Python", "Анализирует детекции: определяет драки, задавливание поросят, беспокойное поведение. Ведёт временные окна по каждой ферме отдельно")
+    Component(health_assessor, "HealthAssessor", "Python", "Оценивает состояние животных по внешним признакам: болезнь, гибель")
+    Component(headcount_tracker, "HeadcountTracker", "Python", "Пересчитывает поголовье по каждой ферме отдельно")
+    Component(event_publisher, "EventPublisher", "Python", "Формирует события аналитики и публикует в Kafka для сервиса оповещений и агрегации")
+    Component(model_registry, "ModelRegistry", "Python", "Хранит версии ONNX-моделей. Переключает модель без остановки инференса")
+    Component(gpu_pool, "GPUPoolManager", "Python", "Распределяет нагрузку между GPU в кластере. Отслеживает утилизацию и доступность GPU")
+}
+
+' === Связи сервиса приёма видео ===
+Rel(thin_agent, stream_receiver, "Сжатый видеопоток", "WebRTC / HTTPS")
+Rel(stream_receiver, stream_decoder, "Сжатые кадры")
+Rel(stream_receiver, farm_router, "Регистрация подключения фермы")
+Rel(stream_decoder, frame_queue, "Декодированные кадры с метаданными фермы")
+Rel(farm_router, pg, "Читает реестр ферм и камер", "SQL")
+
+' === Связи видеоаналитики ===
+Rel(frame_queue, batch_processor, "Кадры из очереди")
+Rel(batch_processor, frame_preprocessor, "Пакет кадров")
+Rel(frame_preprocessor, inference_engine, "Подготовленные тензоры")
+Rel(inference_engine, gpu_pool, "Запрос GPU для инференса")
+Rel(gpu_pool, gpu, "Выполнение на GPU", "CUDA / TensorRT")
+Rel(inference_engine, behavior_analyzer, "Детекции с привязкой к ферме")
+Rel(inference_engine, health_assessor, "Детекции с привязкой к ферме")
+Rel(inference_engine, headcount_tracker, "Детекции с привязкой к ферме")
+Rel(behavior_analyzer, event_publisher, "Событие: драка, задавливание, беспокойство")
+Rel(health_assessor, event_publisher, "Событие: болезнь, гибель")
+Rel(headcount_tracker, event_publisher, "Событие: результат пересчёта")
+Rel(event_publisher, kafka, "Публикует события аналитики", "Kafka Protocol")
+Rel(event_publisher, notification, "Оповещение о нештатной ситуации", "Kafka Protocol")
+Rel(model_registry, inference_engine, "Загружает модель в сессию ONNX Runtime")
+
+@enduml

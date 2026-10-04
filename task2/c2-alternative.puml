@@ -1,0 +1,115 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Диаграмма контейнеров (C2). Альтернативное решение: централизованная архитектура с тонкими агентами
+
+' === Пользователи ===
+Person(оператор, "Оператор фермы", "Получает оповещения, управляет системой")
+Person(зоотехник, "Зоотехник", "Контролирует кормление и поголовье")
+Person(ветеринар, "Ветеринар", "Получает оповещения о здоровье животных")
+Person(администратор, "Администратор", "Управляет ролями и настройками")
+
+' === Центральная платформа ===
+System_Boundary(central, "Центральная платформа") {
+    Container(api_gw, "API Gateway", "Kong", "Маршрутизация запросов, ограничение частоты запросов, аутентификация токенов")
+    Container(auth, "Сервис аутентификации", "Keycloak", "OAuth 2.0 / OIDC, управление ролями по модели RBAC")
+    Container(video_ingest, "Сервис приёма видео", "Go", "Приём видеопотоков с ферм, декодирование, подготовка кадров для ML-инференса")
+    Container(video_engine, "Видеоаналитика", "Python, ONNX Runtime", "ML-инференс на GPU-кластере: детекция драк, задавливания, болезней, пересчёт поголовья")
+    Container(sync_svc, "Сервис синхронизации", "Go", "Приём данных от агентов, отправка команд управления на фермы")
+    Container(aggregation, "Сервис агрегации", "Python", "Агрегация данных со всех ферм, формирование аналитики и отчётов")
+    Container(notification, "Сервис оповещений", "Go", "Формирование и отправка push-уведомлений, email, SMS")
+    Container(feed_mgmt, "Сервис управления кормлением", "Kotlin", "Расписания кормления, учёт запасов корма, прогноз расхода, отправка команд на фермы")
+    Container(water_svc, "Сервис мониторинга водоснабжения", "Go", "Обработка данных с датчиков фильтрации воды, контроль отклонений")
+    Container(device_registry, "Реестр устройств", "Go", "Регистрация и состояние камер, кормушек, поилок, датчиков по всем фермам")
+    Container(metrics, "Сервис метрик", "Go", "Базовые и пользовательские метрики, экспорт в формате Prometheus")
+
+    ContainerDb(pg, "PostgreSQL", "PostgreSQL 16", "Операционные данные: устройства, пользователи, расписания, поголовье")
+    ContainerDb(redis, "Redis", "Redis 7", "Кэш сессий, публикация обновлений в реальном времени")
+}
+
+' === GPU-кластер ===
+System_Ext(gpu, "GPU-кластер", "Серверы с NVIDIA GPU для ML-инференса")
+
+' === Тонкий фермовый агент ===
+System_Boundary(farm, "Тонкий фермовый агент (на каждой ферме)") {
+    Container(stream_fwd, "Ретранслятор видео", "Go", "Захват видеопотоков с камер, сжатие и передача на центральную платформу")
+    Container(cmd_exec, "Исполнитель команд", "Go", "Приём команд от центра, управление кормушками и поилками")
+    Container(data_collector, "Сборщик данных", "Go", "Сбор показаний с датчиков фильтрации воды и отправка на центр")
+    Container(basic_alert, "Локальные оповещения", "Go", "Оповещение дежурного по пороговым правилам при потере связи")
+    Container(local_cache, "Локальный кэш", "Go, SQLite", "Буферизация данных и команд при потере связи")
+
+    Container(mqtt_broker, "MQTT-брокер", "Mosquitto", "Обмен сообщениями с устройствами на ферме")
+}
+
+' === Существующие системы ===
+System_Ext(kafka, "Apache Kafka", "Существующая шина данных компании")
+System_Ext(dwh, "ClickHouse", "Существующее хранилище аналитики")
+System_Ext(erp, "ERP (1С:Агро)", "Финансы, складской учёт")
+System_Ext(web, "Веб-портал (React)", "Существующий портал")
+System_Ext(mobile, "Мобильное приложение (Flutter)", "Существующее приложение")
+System_Ext(bi, "BI (Power BI)", "Отчётность")
+
+' === IoT ===
+System_Ext(камеры, "Видеокамеры", "IP-камеры разных производителей")
+System_Ext(кормушки, "Кормушки и поилки", "Устройства разных производителей")
+System_Ext(датчики, "Датчики фильтрации воды", "Датчики состояния фильтров")
+
+' === Связи пользователей ===
+Rel(оператор, web, "Мониторинг")
+Rel(оператор, mobile, "Оповещения")
+Rel(зоотехник, web, "Данные о поголовье и кормлении")
+Rel(ветеринар, mobile, "Оповещения о здоровье")
+Rel(администратор, api_gw, "Управление настройками", "HTTPS")
+
+' === Внешние клиенты к API Gateway ===
+Rel(web, api_gw, "Запросы", "HTTPS")
+Rel(mobile, api_gw, "Запросы", "HTTPS")
+
+' === API Gateway к сервисам ===
+Rel(api_gw, auth, "Проверка токенов", "HTTP")
+Rel(api_gw, feed_mgmt, "Управление кормлением", "HTTP")
+Rel(api_gw, aggregation, "Данные и аналитика", "HTTP")
+Rel(api_gw, device_registry, "Устройства", "HTTP")
+Rel(api_gw, metrics, "Метрики", "HTTP")
+
+' === Видеоаналитика ===
+Rel(video_ingest, video_engine, "Кадры для инференса", "gRPC")
+Rel(video_engine, gpu, "ML-инференс", "CUDA / TensorRT")
+Rel(video_engine, kafka, "Публикует события аналитики", "Kafka Protocol")
+Rel(video_engine, notification, "Нештатная ситуация", "Kafka Protocol")
+
+' === Внутренние связи центральной платформы ===
+Rel(sync_svc, kafka, "Публикует события синхронизации", "Kafka Protocol")
+Rel(sync_svc, pg, "Сохраняет данные с ферм", "SQL")
+Rel(aggregation, pg, "Читает операционные данные", "SQL")
+Rel(aggregation, dwh, "Сохраняет агрегированные данные", "SQL")
+Rel(aggregation, bi, "Передаёт отчёты", "ODBC")
+Rel(notification, kafka, "Подписка на события оповещений", "Kafka Protocol")
+Rel(feed_mgmt, pg, "Расписания и запасы", "SQL")
+Rel(feed_mgmt, kafka, "Команды кормления для ферм", "Kafka Protocol")
+Rel(water_svc, kafka, "Подписка на данные водоснабжения", "Kafka Protocol")
+Rel(water_svc, notification, "Отклонение показателей воды", "Kafka Protocol")
+Rel(device_registry, pg, "Реестр устройств", "SQL")
+Rel(metrics, redis, "Кэш метрик", "Redis Protocol")
+Rel(auth, pg, "Пользователи и роли", "SQL")
+Rel(sync_svc, erp, "Данные о поголовье и расходах", "REST API")
+
+' === Связи тонкого агента ===
+Rel(stream_fwd, video_ingest, "Сжатый видеопоток", "WebRTC / HTTPS")
+Rel(stream_fwd, камеры, "Видеопоток", "RTSP")
+Rel(cmd_exec, sync_svc, "Получает команды, отправляет статусы", "HTTPS")
+Rel(cmd_exec, mqtt_broker, "Команды кормушкам и поилкам", "MQTT")
+Rel(data_collector, mqtt_broker, "Показания датчиков", "MQTT")
+Rel(data_collector, sync_svc, "Передаёт данные на центр", "HTTPS")
+Rel(local_cache, cmd_exec, "Буфер команд при потере связи", "внутренний вызов")
+Rel(local_cache, data_collector, "Буфер данных при потере связи", "внутренний вызов")
+Rel(basic_alert, оператор, "SMS / локальная сеть", "SMS")
+Rel(basic_alert, data_collector, "Пороговые правила на данных датчиков", "внутренний вызов")
+
+' === IoT к агенту ===
+Rel(кормушки, mqtt_broker, "Команды и статусы", "MQTT / Modbus")
+Rel(датчики, mqtt_broker, "Показания", "MQTT")
+
+@enduml
